@@ -63,6 +63,9 @@ GITHUB_TOKEN=your_github_personal_access_token_here
 ├── .env                   # Environment variable injection
 └── README.md              # Project documentation
 ```
+## 🔬 Lab Results & Deliverables
+
+All required files and deliverables for this assignment have been organized into the `/solution` directory
 
 ---
 *Created for Lab 4 – LangGraph Agent Assignment*
