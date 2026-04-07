@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TravelBuddy - Transparent AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        #mynetwork { width: 100%; height: 100%; }
+        .msg-content p { margin-bottom: 0.5rem; }
+        /* Custom scrollbar for reasoning pane */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+    </style>
+</head>
+<body class="bg-gray-50 h-screen flex overflow-hidden font-sans">
+
+    <!-- 1. LEFT PANE: Chat UI (25%) -->
+    <div class="w-1/4 h-full bg-white shadow-xl border-r border-gray-200 flex flex-col z-10 relative">
+        <div class="bg-blue-600 p-5 text-white">
+            <h1 class="text-xl font-bold flex items-center space-x-2"><span>✈️</span> <span>TravelBuddy</span></h1>
+            <p class="text-blue-200 text-xs mt-1">ReAct Graph Demo</p>
+        </div>
+
+        <div id="chat-history" class="flex-1 p-4 overflow-y-auto space-y-5 bg-gray-50">
+            <div class="flex flex-col space-y-1 items-start">
+                <span class="text-[10px] text-gray-400 font-bold uppercase tracking-wide ml-1">System</span>
+                <div class="bg-white border rounded-2xl p-4 text-sm text-gray-700 shadow-sm msg-content">
+                    Welcome! I am TravelBuddy. Ask me to search flights, hotels, or calculate budgets!
+                </div>
+            </div>
+        </div>
+
+        <div id="status" class="px-5 py-3 text-sm text-blue-600 font-semibold italic hidden animate-pulse bg-blue-50/50 border-t border-blue-100">
+            Processing...
+        </div>
+
+        <div class="p-4 bg-white border-t">
+            <div class="flex flex-col space-y-3">
+                <input id="message-input" type="text" 
+                       class="border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 shadow-sm transition" 
+                       placeholder="Ask me something..." 
+                       onkeypress="handleKeyPress(event)">
+                <button class="bg-blue-600 text-white px-5 py-3 rounded-xl font-bold hover:bg-blue-700 transition shadow-sm w-full" onclick="sendMessage()">
+                    Send Message
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. MIDDLE PANE: Graph & Timeline (45%) -->
+    <div class="w-2/4 h-full relative bg-[#f8fafc]">
+        <div class="absolute top-5 left-5 bg-white/95 backdrop-blur px-5 py-3 rounded-2xl shadow-sm z-10 border border-gray-200 border-b-4 border-b-blue-600">
+            <p class="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Execution Pointer</p>
+            <p id="graph-status-label" class="text-gray-800 font-mono mt-1 font-bold text-lg"> Idle</p>
+        </div>
+        
+        <!-- Timeline Playback Controls -->
+        <div class="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-white/90 backdrop-blur px-8 py-3.5 rounded-full shadow-2xl border border-gray-100 flex items-center space-x-6 z-20">
+            <button onclick="stepBack()" class="p-2.5 hover:bg-gray-100 rounded-full transition text-gray-600 disabled:opacity-30" id="btn-prev" disabled>
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7" /></svg>
+            </button>
+            <button id="play-pause-btn" onclick="togglePlay()" class="bg-gray-900 text-white px-8 py-2.5 rounded-full font-bold hover:bg-black transition shadow-md w-36 flex justify-center items-center text-sm tracking-wide">
+                ▶ PLAY
+            </button>
+            <button onclick="stepForward()" class="p-2.5 hover:bg-gray-100 rounded-full transition text-gray-600 disabled:opacity-30" id="btn-next" disabled>
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" /></svg>
+            </button>
+        </div>
+
+        <div id="mynetwork"></div>
+    </div>
+
+    <!-- 3. RIGHT PANE: Reasoning Steps (30%) -->
+    <div class="w-1/4 h-full bg-white shadow-2xl border-l flex flex-col z-10 relative">
+        <div class="bg-slate-900 p-5 text-white">
+            <h2 class="text-lg font-bold flex items-center space-x-2"><span>🧠</span><span>Engine Logs</span></h2>
+            <p class="text-slate-400 text-xs mt-1">LangGraph State Streaming</p>
+        </div>
+        <div id="reasoning-list" class="flex-1 p-5 overflow-y-auto space-y-4 bg-slate-50 relative pb-20">
+            <div class="text-center text-gray-400 text-sm mt-10 italic">Waiting for queries...</div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script>
+        // --- 1. GRAPH UI ---
+        // Using explicit x, y coordinates to match the exact Mermaid layout image
+        const nodes = new vis.DataSet([
+            { id: '__start__', label: 'Start', shape: 'ellipse', color: '#e2e8f0', font: {size: 14}, borderWidth: 2, x: 0, y: -150 },
+            { id: 'agent', label: '🤖 Agent', shape: 'box', color: '#eff6ff', font: {size: 18, color: '#1d4ed8', bold: true}, borderWidth: 2, margin: 15, x: 0, y: 0 },
+            { id: 'tools', label: '🛠️ Tools', shape: 'box', color: '#fdf2f8', font: {size: 18, color: '#be185d', bold: true}, borderWidth: 2, margin: 15, x: 180, y: 150 },
+            { id: '__end__', label: 'End', shape: 'ellipse', color: '#e2e8f0', font: {size: 14}, borderWidth: 2, x: -180, y: 150 }
+        ]);
+
+        const edges = new vis.DataSet([
+            { id: 'e1', from: '__start__', to: 'agent', arrows: 'to', width: 2, color: '#cbd5e1' },
+            // Curved correctly matching the image references
+            { id: 'e2', from: 'agent', to: 'tools', arrows: 'to', label: 'tools needed', font: {align: 'horizontal', size: 10, color: '#94a3b8', background: '#f8fafc', strokeWidth: 0}, width: 2, color: '#cbd5e1', dashes: true, smooth: { type: 'curvedCW', roundness: 0.2 } },
+            { id: 'e3', from: 'tools', to: 'agent', arrows: 'to', width: 2, color: '#cbd5e1', smooth: { type: 'curvedCW', roundness: 0.2 } },
+            { id: 'e4', from: 'agent', to: '__end__', arrows: 'to', label: 'direct answer', font: {align: 'horizontal', size: 10, color: '#94a3b8', background: '#f8fafc', strokeWidth: 0}, width: 2, color: '#cbd5e1', dashes: true, smooth: { type: 'curvedCCW', roundness: 0.2 } }
+        ]);
+
+        // Removed hierarchical layout so explicit x, y coordinates are respected
+        const network = new vis.Network(document.getElementById('mynetwork'), {nodes, edges}, {
+            physics: false, 
+            interaction: { zoomView: true, dragNodes: true }
+        });
+
+        const defaultStyles = {
+            '__start__': { background: '#f1f5f9', border: '#cbd5e1' },
+            'agent': { background: '#eff6ff', border: '#bfdbfe' },
+            'tools': { background: '#fdf2f8', border: '#fbcfe8' },
+            '__end__': { background: '#f1f5f9', border: '#cbd5e1' }
+        };
+
+        function visuallyHighlightNode(nodeId, prevNodeId = null) {
+            // Reset all
+            nodes.update([
+                { id: '__start__', color: defaultStyles['__start__'], shadow: false },
+                { id: 'agent', color: defaultStyles['agent'], shadow: false },
+                { id: 'tools', color: defaultStyles['tools'], shadow: false },
+                { id: '__end__', color: defaultStyles['__end__'], shadow: false }
+            ]);
+            edges.forEach(edge => edges.update({ id: edge.id, width: 2, color: '#cbd5e1' }));
+
+            document.getElementById('graph-status-label').innerText = nodeId;
+            
+            // Highlight Target
+            nodes.update({ 
+                id: nodeId, 
+                color: { background: '#fef08a', border: '#d97706' }, 
+                shadow: { enabled: true, color: 'rgba(217,119,6,0.3)', size: 15, x: 0, y: 5 }
+            });
+            
+            // Edge Paths
+            if (nodeId === 'agent') {
+                // If we came backwards from tools, highlight e3, otherwise e1
+                if (prevNodeId === 'tools') {
+                    edges.update({ id: 'e3', width: 4, color: '#d97706' });
+                } else {
+                    edges.update({ id: 'e1', width: 4, color: '#d97706' });
+                }
+            }
+            else if (nodeId === 'tools') edges.update({ id: 'e2', width: 4, color: '#d97706' });
+            else if (nodeId === '__end__') {
+                edges.update({ id: 'e4', width: 4, color: '#16a34a' }); 
+                nodes.update({ id: '__end__', color: { background: '#dcfce3', border: '#16a34a' }});
+            }
+        }
+
+        // --- 2. TIMELINE PLAYBACK LOGIC ---
+        let stepsSequence = [];
+        let currentStepIndex = -1;
+        let isPlaying = false;
+        let playbackTimer = null;
+        let chatbotFinalMessage = null;
+        let chatFinished = false; // Check if the backend is completely done streaming
+
+        function refreshReasoningUI() {
+            const list = document.getElementById('reasoning-list');
+            if (stepsSequence.length === 0) {
+                list.innerHTML = '<div class="text-center text-gray-400 text-sm mt-10 italic">Waiting...</div>';
+                return;
+            }
+            
+            list.innerHTML = '';
+            stepsSequence.forEach((step, idx) => {
+                const isActive = idx === currentStepIndex;
+                const isPast = idx < currentStepIndex;
+                
+                let bgClass = isActive ? 'bg-indigo-50 border-indigo-300 shadow-md transform scale-[1.02]' : 'bg-white border-gray-200';
+                let opacity = isPast ? 'opacity-80' : (idx > currentStepIndex ? 'opacity-40 grayscale' : 'opacity-100');
+                let badgeClass = isActive ? 'bg-indigo-600' : 'bg-slate-400';
+                
+                let html = `
+                <div class="border rounded-2xl p-4 ${bgClass} ${opacity} transition-all duration-300 mb-4" id="step-card-${idx}">
+                    <div class="flex items-center justify-between mb-3 border-b pb-2 border-slate-100/50">
+                        <span class="${badgeClass} text-white text-[10px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider">
+                            ${step.node}
+                        </span>
+                        <span class="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Step ${idx + 1}</span>
+                    </div>
+                    <div class="text-xs text-slate-700 font-mono whitespace-pre-wrap leading-loose">${step.details}</div>
+                </div>`;
+                list.insertAdjacentHTML('beforeend', html);
+                
+                if (isActive) {
+                    const card = document.getElementById(`step-card-${idx}`);
+                    // Smooth scroll the timeline wrapper
+                    list.scrollTo({ top: card.offsetTop - 20, behavior: 'smooth' });
+                }
+            });
+            
+            // Re-check Chat Display
+            if (stepsSequence[currentStepIndex] && stepsSequence[currentStepIndex].node === '__end__' && chatbotFinalMessage) {
+                appendChat("TravelBuddy", chatbotFinalMessage, false);
+                document.getElementById('status').classList.add('hidden');
+                chatbotFinalMessage = null; // show only once per cycle
+            }
+        }
+
+        function applyStep(index) {
+            const step = stepsSequence[index];
+            if (!step) return;
+            const prevNode = index > 0 ? stepsSequence[index - 1].node : null;
+            visuallyHighlightNode(step.node, prevNode);
+            refreshReasoningUI();
+            
+            document.getElementById('btn-prev').disabled = index <= 0;
+            // NEXT button should be disabled if we are at the end, EXCEPT if graph is still streaming
+            document.getElementById('btn-next').disabled = (index >= stepsSequence.length - 1) && chatFinished;
+        }
+
+        function triggerNextPlayback() {
+            if (currentStepIndex < stepsSequence.length - 1) {
+                currentStepIndex++;
+                applyStep(currentStepIndex);
+                if (isPlaying) playbackTimer = setTimeout(triggerNextPlayback, 1800); // Wait 1.8s for reading logs
+            } else {
+                // If we ran out of buffered steps but the server hasn't sent __end__ yet
+                if (isPlaying && !chatFinished) {
+                    playbackTimer = setTimeout(triggerNextPlayback, 500); // Check buffer again soon
+                } else if (isPlaying && chatFinished) {
+                    // Reached absolute end. Stop playing.
+                    isPlaying = false;
+                    document.getElementById('play-pause-btn').innerHTML = "▶ PLAY";
+                }
+            }
+        }
+
+        function togglePlay() {
+            if (stepsSequence.length === 0) return;
+            isPlaying = !isPlaying;
+            document.getElementById('play-pause-btn').innerHTML = isPlaying ? "⏸ PAUSE" : "▶ PLAY";
+            
+            if (isPlaying) {
+                clearTimeout(playbackTimer);
+                triggerNextPlayback();
+            } else {
+                clearTimeout(playbackTimer);
+            }
+        }
+
+        function stepForward() {
+            isPlaying = false;
+            document.getElementById('play-pause-btn').innerHTML = "▶ PLAY";
+            clearTimeout(playbackTimer);
+            if (currentStepIndex < stepsSequence.length - 1) {
+                currentStepIndex++;
+                applyStep(currentStepIndex);
+            }
+        }
+
+        function stepBack() {
+            isPlaying = false;
+            document.getElementById('play-pause-btn').innerHTML = "▶ PLAY";
+            clearTimeout(playbackTimer);
+            if (currentStepIndex > 0) {
+                currentStepIndex--;
+                applyStep(currentStepIndex);
+            }
+            // Reverse engineering: if we step back, re-show "thinking" status? 
+            // We just keep the chat box intact to keep it easy.
+        }
+
+
+        // --- 3. BACKEND COMMUNICATION ---
+        const ws = new WebSocket("ws://localhost:8000/ws");
+        
+        function appendChat(sender, text, isUser) {
+            const list = document.getElementById("chat-history");
+            const formatted = text.replace(/\n/g, '<br>');
+            const html = `
+            <div class="flex flex-col space-y-1 ${isUser ? 'items-end' : 'items-start'}">
+                <span class="text-[10px] text-gray-400 font-bold uppercase tracking-wide px-1">${sender}</span>
+                <div class="${isUser ? 'bg-slate-900 text-white' : 'bg-white border text-gray-800'} 
+                            rounded-2xl p-4 text-sm max-w-[90%] shadow-sm msg-content relative group">
+                    ${formatted}
+                </div>
+            </div>`;
+            list.insertAdjacentHTML('beforeend', html);
+            list.scrollTop = list.scrollHeight;
+        }
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === "node_executed" || data.type === "final_answer") {
+                // Buffer the step
+                stepsSequence.push({ node: data.node, details: data.details });
+                
+                if (data.type === "final_answer") {
+                    chatbotFinalMessage = data.text;
+                    chatFinished = true;
+                }
+                
+                // If this is the FIRST incoming event, bootstrap playback
+                if (stepsSequence.length === 1) {
+                    isPlaying = true;
+                    document.getElementById('play-pause-btn').innerHTML = "⏸ PAUSE";
+                    document.getElementById('btn-next').disabled = false;
+                    triggerNextPlayback();
+                } else {
+                    refreshReasoningUI(); // Re-render the right pane so future cards show up grayed out
+                }
+            } 
+        };
+
+        function sendMessage() {
+            const input = document.getElementById("message-input");
+            const text = input.value.trim();
+            if (!text) return;
+
+            // Clean UI & Reset Player for new turn
+            stepsSequence = [];
+            currentStepIndex = -1;
+            chatbotFinalMessage = null;
+            chatFinished = false;
+            isPlaying = false;
+            clearTimeout(playbackTimer);
+            
+            refreshReasoningUI();
+            
+            appendChat("You", text, true);
+            document.getElementById('status').classList.remove('hidden');
+            
+            ws.send(JSON.stringify({ message: text }));
+            input.value = "";
+        }
+
+        function handleKeyPress(e) {
+            if (e.key === 'Enter') sendMessage();
+        }
+
+        // Global keyboard shortcuts for playback 
+        document.addEventListener('keydown', function(event) {
+            // Ignore if the user is typing in the chat input
+            if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') {
+                return;
+            }
+            if (event.key === 'ArrowRight') {
+                stepForward();
+            } else if (event.key === 'ArrowLeft') {
+                stepBack();
+            } else if (event.key === ' ') {
+                event.preventDefault(); // Prevent page scroll when reading logs
+                togglePlay();
+            }
+        });
+    </script>
+</body>
+</html>
